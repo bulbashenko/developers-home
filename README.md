@@ -1,4 +1,4 @@
 # btelekom: developers home
-stack: gitea + woodpecker + wekan
-DB: postgresql
-Web: traefik
+- stack: gitea + woodpecker + wekan
+- DB: postgresql
+- Web: traefik
