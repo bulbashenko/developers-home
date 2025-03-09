@@ -1,0 +1,359 @@
+version: "3.7"
+
+networks:
+  # Сеть для Gitea
+  gitea:
+    external: false
+  # Сеть для Woodpecker
+  woodpecker-server:
+    external: false
+  postgres:
+    external: false
+
+volumes:
+  certs:
+  postgres-data:
+  gitea-data:
+  openproject-data:
+
+services:
+  ##############################################################################
+  # Traefik — наш роутер, SSL и т.д.
+  ##############################################################################
+  traefik:
+    image: traefik:v2.9
+    container_name: traefik
+    command:
+      - "--log.level=DEBUG"
+      - "--api.insecure=false"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.myresolver.acme.tlschallenge=true"
+      - "--certificatesresolvers.myresolver.acme.email=${ACME_EMAIL}"
+      - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - "./certs:/letsencrypt"
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+    networks:
+      - gitea
+      - woodpecker-server
+    restart: unless-stopped
+
+  ##############################################################################
+  # PostgreSQL (общая база для Gitea, Woodpecker, OpenProject)
+  ##############################################################################
+  postgres:
+    image: postgres:14
+    container_name: postgres
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_MULTIPLE_DATABASES=gitea,woodpecker
+    volumes:
+      - ./postgres/data:/var/lib/postgresql/data
+      - ./postgres/init-multiple-dbs.sh:/docker-entrypoint-initdb.d/init-multiple-dbs.sh
+    networks:
+      - gitea
+      - woodpecker-server
+      - postgres
+    restart: unless-stopped
+
+  ##############################################################################
+  # Gitea
+  ##############################################################################
+  gitea:
+    image: gitea/gitea:latest
+    container_name: gitea
+    environment:
+      - USER_UID=1000
+      - USER_GID=1000
+      - GITEA_database_DB_TYPE=postgres
+      - GITEA_database_HOST=postgres:5432
+      - GITEA_database_NAME=gitea
+      - GITEA_database_USER=${POSTGRES_USER:-postgres}
+      - GITEA_database_PASSWD=${POSTGRES_PASSWORD}
+      - GITEA__server__ROOT_URL=https://vcs.${DOMAIN}
+      - GITEA__server__DOMAIN=vcs.${DOMAIN}
+      - GITEA__server__SSH_DOMAIN=vcs.${DOMAIN}
+    volumes:
+      - gitea-data:/data
+    networks:
+      - gitea
+    depends_on:
+      - postgres
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.gitea.rule=Host(`vcs.${DOMAIN}`)"
+      - "traefik.http.routers.gitea.entrypoints=websecure"
+      - "traefik.http.routers.gitea.tls.certresolver=myresolver"
+      - "traefik.http.services.gitea.loadbalancer.server.port=3000"
+    restart: unless-stopped
+
+  ##############################################################################
+  # Woodpecker CI (Server + Agent)
+  ##############################################################################
+  woodpecker-server:
+    image: woodpeckerci/woodpecker-server:v3
+    container_name: woodpecker-server
+    environment:
+      - WOODPECKER_GITEA=true
+      - WOODPECKER_GITEA_URL=https://vcs.${DOMAIN}
+      - WOODPECKER_SECRET=${WOODPECKER_SECRET}
+      - WOODPECKER_GITEA_CLIENT=${WOODPECKER_GITEA_CLIENT}
+      - WOODPECKER_GITEA_SECRET=${WOODPECKER_GITEA_SECRET}
+      - WOODPECKER_HOST=https://pipeline.${DOMAIN}
+      - WOODPECKER_OPEN=true
+      - WOODPECKER_ADMIN=bulbashenko
+      - WOODPECKER_DATABASE_DRIVER=postgres
+      - WOODPECKER_DATABASE_DATASOURCE=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/woodpecker?sslmode=disable
+    networks:
+      - woodpecker-server
+    depends_on:
+      - postgres
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.woodpecker.rule=Host(`pipeline.${DOMAIN}`)"
+      - "traefik.http.routers.woodpecker.entrypoints=websecure"
+      - "traefik.http.routers.woodpecker.tls.certresolver=myresolver"
+      - "traefik.http.services.woodpecker.loadbalancer.server.port=8000"
+    restart: unless-stopped
+
+  woodpecker-agent:
+    image: woodpeckerci/woodpecker-agent:v3
+    container_name: woodpecker-agent
+    command: agent
+    environment:
+      - WOODPECKER_SERVER=woodpecker-server:9000
+      - WOODPECKER_SECRET=${WOODPECKER_SECRET}
+      - WOODPECKER_AGENT_SECRET=${WOODPECKER_AGENT_SECRET}
+      - WOODPECKER_MAX_PROCS=2
+    depends_on:
+      - woodpecker-server
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - woodpecker-server
+    restart: unless-stopped
+
+  ##############################################################################
+
+  ##############################################################################
+  # Автохил (по желанию, чтобы рестартить контейнеры при сбоях)
+  ##############################################################################
+  autoheal:
+    image: willfarrell/autoheal:1.2.0
+    container_name: autoheal
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - AUTOHEAL_CONTAINER_LABEL=autoheal
+      - AUTOHEAL_START_PERIOD=600
+      - AUTOHEAL_INTERVAL=30
+    networks:
+      - gitea
+      - postgres
+      - woodpecker-server
+    restart: unless-stopped
+
+root@developers-home:~/developers-home# version: "3.7"
+
+root@developers-home:~/developers-home# cat docker-compose.yml 
+version: "3.7"
+
+networks:
+  # Сеть для Gitea
+  gitea:
+    external: false
+  # Сеть для Woodpecker
+  woodpecker-server:
+    external: false
+  postgres:
+    external: false
+
+volumes:
+  certs:
+  postgres-data:
+  gitea-data:
+  openproject-data:
+  wekan-data:
+
+services:
+  ##############################################################################
+  # Traefik — наш роутер, SSL и т.д.
+  ##############################################################################
+  traefik:
+    image: traefik:v2.9
+    container_name: traefik
+    command:
+      - "--log.level=DEBUG"
+      - "--api.insecure=false"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.myresolver.acme.tlschallenge=true"
+      - "--certificatesresolvers.myresolver.acme.email=${ACME_EMAIL}"
+      - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - "./certs:/letsencrypt"
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+    networks:
+      - gitea
+      - woodpecker-server
+    restart: unless-stopped
+
+  ##############################################################################
+  # PostgreSQL (общая база для Gitea, Woodpecker, OpenProject)
+  ##############################################################################
+  postgres:
+    image: postgres:14
+    container_name: postgres
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_MULTIPLE_DATABASES=gitea,woodpecker
+    volumes:
+      - ./postgres/data:/var/lib/postgresql/data
+      - ./postgres/init-multiple-dbs.sh:/docker-entrypoint-initdb.d/init-multiple-dbs.sh
+    networks:
+      - gitea
+      - woodpecker-server
+      - postgres
+    restart: unless-stopped
+
+  ##############################################################################
+  # Gitea
+  ##############################################################################
+  gitea:
+    image: gitea/gitea:latest
+    container_name: gitea
+    environment:
+      - USER_UID=1000
+      - USER_GID=1000
+      - GITEA_database_DB_TYPE=postgres
+      - GITEA_database_HOST=postgres:5432
+      - GITEA_database_NAME=gitea
+      - GITEA_database_USER=${POSTGRES_USER:-postgres}
+      - GITEA_database_PASSWD=${POSTGRES_PASSWORD}
+      - GITEA__server__ROOT_URL=https://vcs.${DOMAIN}
+      - GITEA__server__DOMAIN=vcs.${DOMAIN}
+      - GITEA__server__SSH_DOMAIN=vcs.${DOMAIN}
+    volumes:
+      - gitea-data:/data
+    networks:
+      - gitea
+    depends_on:
+      - postgres
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.gitea.rule=Host(`vcs.${DOMAIN}`)"
+      - "traefik.http.routers.gitea.entrypoints=websecure"
+      - "traefik.http.routers.gitea.tls.certresolver=myresolver"
+      - "traefik.http.services.gitea.loadbalancer.server.port=3000"
+    restart: unless-stopped
+
+  ##############################################################################
+  # Woodpecker CI (Server + Agent)
+  ##############################################################################
+  woodpecker-server:
+    image: woodpeckerci/woodpecker-server:v3
+    container_name: woodpecker-server
+    environment:
+      - WOODPECKER_GITEA=true
+      - WOODPECKER_GITEA_URL=https://vcs.${DOMAIN}
+      - WOODPECKER_SECRET=${WOODPECKER_SECRET}
+      - WOODPECKER_GITEA_CLIENT=${WOODPECKER_GITEA_CLIENT}
+      - WOODPECKER_GITEA_SECRET=${WOODPECKER_GITEA_SECRET}
+      - WOODPECKER_HOST=https://pipeline.${DOMAIN}
+      - WOODPECKER_OPEN=true
+      - WOODPECKER_ADMIN=bulbashenko
+      - WOODPECKER_DATABASE_DRIVER=postgres
+      - WOODPECKER_DATABASE_DATASOURCE=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/woodpecker?sslmode=disable
+    networks:
+      - woodpecker-server
+    depends_on:
+      - postgres
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.woodpecker.rule=Host(`pipeline.${DOMAIN}`)"
+      - "traefik.http.routers.woodpecker.entrypoints=websecure"
+      - "traefik.http.routers.woodpecker.tls.certresolver=myresolver"
+      - "traefik.http.services.woodpecker.loadbalancer.server.port=8000"
+    restart: unless-stopped
+
+  woodpecker-agent:
+    image: woodpeckerci/woodpecker-agent:v3
+    container_name: woodpecker-agent
+    command: agent
+    environment:
+      - WOODPECKER_SERVER=woodpecker-server:9000
+      - WOODPECKER_SECRET=${WOODPECKER_SECRET}
+      - WOODPECKER_AGENT_SECRET=${WOODPECKER_AGENT_SECRET}
+      - WOODPECKER_MAX_PROCS=2
+    depends_on:
+      - woodpecker-server
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - woodpecker-server
+    restart: unless-stopped
+
+  ##############################################################################
+
+  ##############################################################################
+  # Автохил (по желанию, чтобы рестартить контейнеры при сбоях)
+  ##############################################################################
+  autoheal:
+    image: willfarrell/autoheal:1.2.0
+    container_name: autoheal
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - AUTOHEAL_CONTAINER_LABEL=autoheal
+      - AUTOHEAL_START_PERIOD=600
+      - AUTOHEAL_INTERVAL=30
+    networks:
+      - gitea
+      - postgres
+      - woodpecker-server
+    restart: unless-stopped
+
+  ##############################################################################
+  # Wekan + Mongo
+  ##############################################################################
+  wekan-mongo:
+    image: mongo:4.4
+    container_name: wekan-mongo
+    restart: unless-stopped
+    volumes:
+      - wekan-data:/data/db
+    networks:
+      - gitea
+
+  wekan:
+    image: wekanteam/wekan:latest
+    container_name: wekan
+    depends_on:
+      - wekan-mongo
+    environment:
+      - MONGO_URL=mongodb://wekan-mongo:27017/wekan
+      - ROOT_URL=https://board.${DOMAIN}
+      - PORT=8080
+      # - WITH_API=true # Если хотите включить REST API
+    networks:
+      - gitea
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.wekan.rule=Host(`board.${DOMAIN}`)"
+      - "traefik.http.routers.wekan.entrypoints=websecure"
+      - "traefik.http.routers.wekan.tls.certresolver=myresolver"
+      - "traefik.http.services.wekan.loadbalancer.server.port=8080"
+    restart: unless-stopped
