@@ -1,0 +1,252 @@
+version: "3.9"
+
+networks:
+  external:
+    driver: bridge
+  internal:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+    internal: true
+
+volumes:
+  gitea_data:
+  jenkins-data:
+  jenkins-docker-certs:
+  caddy_data:
+
+services:
+  # ------------------------------------------------
+  # 1) WireGuard
+  # ------------------------------------------------
+  wireguard:
+    image: lscr.io/linuxserver/wireguard:latest
+    container_name: wireguard
+    cap_add:
+      - NET_ADMIN
+    environment:
+      - PUID=${WIREGUARD_PUID}
+      - PGID=${WIREGUARD_PGID}
+      - TZ=${TZ}
+      - SERVERURL=${WIREGUARD_SERVERURL}
+      - SERVERPORT=${WIREGUARD_SERVERPORT}
+      - PEERS=${WIREGUARD_PEERS}
+      - PEERDNS=${WIREGUARD_PEERDNS}
+      - ALLOWEDIPS=${WIREGUARD_ALLOWEDIPS}
+    volumes:
+      - ./wireguard_config:/config
+    networks:
+      external: {}
+      internal:
+        ipv4_address: 172.20.0.2
+    ports:
+      - "${WIREGUARD_SERVERPORT}:${WIREGUARD_SERVERPORT}/udp"
+    restart: unless-stopped
+
+  # ------------------------------------------------
+  # 2) Caddy (Reverse Proxy с автоматическим SSL)
+  # ------------------------------------------------
+  caddy:
+    image: bulbashenko/caddy-he:latest
+    container_name: caddy
+    dns:
+      - 172.20.0.7
+      - 1.1.1.1
+    networks:
+      external: {}
+      internal:
+        ipv4_address: 172.20.0.3
+    volumes:
+      - ./caddy_data:/data
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+    environment:
+      - TZ=${TZ}
+    restart: unless-stopped
+
+  # ------------------------------------------------
+  # 3) Gitea
+  # ------------------------------------------------
+  gitea:
+    image: gitea/gitea:latest
+    container_name: gitea
+    dns:
+      - 172.20.0.7 
+      - 1.1.1.1
+    networks:
+      external: {}
+      internal:
+        ipv4_address: 172.20.0.4
+    environment:
+      - USER_UID=${GITEA_USER_UID}
+      - USER_GID=${GITEA_USER_GID}
+      - GITEA__server__ROOT_URL=https://${GIT_SUBDOMAIN}.${DOMAIN}
+      - GITEA__webhook__ALLOWED_HOST_LIST=${CI_SUBDOMAIN}.${DOMAIN}
+      - TZ=${TZ}
+    volumes:
+      - gitea_data:/data
+    restart: unless-stopped
+
+  # ------------------------------------------------
+  # 4) Jenkins
+  # ------------------------------------------------
+  jenkins:
+    image: jenkins/jenkins:lts-jdk17
+    container_name: jenkins
+    dns:
+      - 172.20.0.7
+      - 1.1.1.1
+    networks:
+      external: {}
+      internal:
+        ipv4_address: 172.20.0.5
+    # Если тебе нужно, чтобы Jenkins запускал Docker-контейнеры,
+    # можно пробросить docker.sock, но будь аккуратней с безопасностью.
+    volumes:
+      - jenkins-data:/var/jenkins_home
+      - jenkins-docker-certs:/certs/client
+    environment:
+      - DOCKER_TLS_CERTDIR=/certs
+      - TZ=${TZ}
+    restart: unless-stopped
+
+  # ------------------------------------------------
+  # 5) CoreDNS
+  # ------------------------------------------------
+  coredns:
+    image: coredns/coredns:latest
+    container_name: coredns
+    networks:
+      internal:
+        ipv4_address: 172.20.0.7
+    volumes:
+      - ./coredns/Corefile:/Corefile:ro
+    restart: unless-stopped
+
+root@developers-home:~/developers-home# version: "3.9"
+
+root@developers-home:~/developers-home# cat docker-compose.yml 
+version: "3.9"
+
+networks:
+  external:
+    driver: bridge
+  internal:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+    internal: true
+
+volumes:
+  gitea_data:
+  jenkins-data:
+  jenkins-docker-certs:
+  caddy_data:
+
+services:
+  # ------------------------------------------------
+  # 1) WireGuard
+  # ------------------------------------------------
+  wireguard:
+    image: lscr.io/linuxserver/wireguard:latest
+    container_name: wireguard
+    cap_add:
+      - NET_ADMIN
+    environment:
+      - PUID=${WIREGUARD_PUID}
+      - PGID=${WIREGUARD_PGID}
+      - TZ=${TZ}
+      - SERVERURL=${WIREGUARD_SERVERURL}
+      - SERVERPORT=${WIREGUARD_SERVERPORT}
+      - PEERS=${WIREGUARD_PEERS}
+      - PEERDNS=${WIREGUARD_PEERDNS}
+      - ALLOWEDIPS=${WIREGUARD_ALLOWEDIPS}
+    volumes:
+      - ./wireguard_config:/config
+    networks:
+      external: {}
+      internal:
+        ipv4_address: 172.20.0.2
+    ports:
+      - "${WIREGUARD_SERVERPORT}:${WIREGUARD_SERVERPORT}/udp"
+    restart: unless-stopped
+
+  # ------------------------------------------------
+  # 2) Caddy (Reverse Proxy с автоматическим SSL)
+  # ------------------------------------------------
+  caddy:
+    image: bulbashenko/caddy-he:latest
+    container_name: caddy
+    dns:
+      - 172.20.0.7
+      - 1.1.1.1
+    networks:
+      external: {}
+      internal:
+        ipv4_address: 172.20.0.3
+    volumes:
+      - ./caddy_data:/data
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+    environment:
+      - TZ=${TZ}
+    restart: unless-stopped
+
+  # ------------------------------------------------
+  # 3) Gitea
+  # ------------------------------------------------
+  gitea:
+    image: gitea/gitea:latest
+    container_name: gitea
+    dns:
+      - 172.20.0.7 
+      - 1.1.1.1
+    networks:
+      external: {}
+      internal:
+        ipv4_address: 172.20.0.4
+    environment:
+      - USER_UID=${GITEA_USER_UID}
+      - USER_GID=${GITEA_USER_GID}
+      - GITEA__server__ROOT_URL=https://${GIT_SUBDOMAIN}.${DOMAIN}
+      - GITEA__webhook__ALLOWED_HOST_LIST=${CI_SUBDOMAIN}.${DOMAIN}
+      - TZ=${TZ}
+    volumes:
+      - gitea_data:/data
+    restart: unless-stopped
+
+  # ------------------------------------------------
+  # 4) Jenkins
+  # ------------------------------------------------
+  jenkins:
+    image: jenkins/jenkins:lts-jdk17
+    container_name: jenkins
+    dns:
+      - 172.20.0.7
+      - 1.1.1.1
+    networks:
+      external: {}
+      internal:
+        ipv4_address: 172.20.0.5
+    # Если тебе нужно, чтобы Jenkins запускал Docker-контейнеры,
+    # можно пробросить docker.sock, но будь аккуратней с безопасностью.
+    volumes:
+      - jenkins-data:/var/jenkins_home
+      - jenkins-docker-certs:/certs/client
+    environment:
+      - DOCKER_TLS_CERTDIR=/certs
+      - TZ=${TZ}
+    restart: unless-stopped
+
+  # ------------------------------------------------
+  # 5) CoreDNS
+  # ------------------------------------------------
+  coredns:
+    image: coredns/coredns:latest
+    container_name: coredns
+    networks:
+      internal:
+        ipv4_address: 172.20.0.7
+    volumes:
+      - ./coredns/Corefile:/Corefile:ro
+    restart: unless-stopped
